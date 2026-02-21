@@ -212,3 +212,4 @@ REACT_APP_USER_POOL_CLIENT_ID=XXXXXXXXXXXXXXXXXXXXXXXXXX
 ## Credits
 
 Texas A&M University — Mays Business School · AWS AI Hackathon 2025
+
