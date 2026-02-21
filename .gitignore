@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Environment and secrets (never commit)
+.env
+.env.local
+.env.*.local
+*.env
+frontend/.env
+backend/.env
+_local/
+aws_cli_cred.txt
+*cred*.txt
+*.pem
+
+# Build and deploy artifacts
+backend/.aws-sam/
+frontend/build/
+dist/
+*.log
+
+# IDE and OS
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*.swo
+
+# Test and coverage
+coverage/
+.nyc_output/
+*.lcov
+
+# Optional / local only
+.plan
+plan.txt
+*.docx
+.bedrock-ftu.b64

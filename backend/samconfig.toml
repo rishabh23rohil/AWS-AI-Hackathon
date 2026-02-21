@@ -1,0 +1,10 @@
+# SAM CLI config - use: sam deploy (or sam deploy --guided to confirm)
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "texas-insights-engine"
+region = "us-east-1"
+parameter_overrides = "Stage=dev EnableKendra=false FrontendUrl=\"http://localhost:3000\""
+capabilities = "CAPABILITY_IAM CAPABILITY_NAMED_IAM"
+confirm_changeset = true
+resolve_s3 = true

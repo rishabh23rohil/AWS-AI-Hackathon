@@ -1,0 +1,155 @@
+{
+  "Comment": "Texas Insights Engine - Brief Generation Pipeline",
+  "StartAt": "IngestSources",
+  "States": {
+    "IngestSources": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${IngestSourcesFunctionArn}",
+        "Payload.$": "$"
+      },
+      "ResultPath": "$.ingestionResult",
+      "ResultSelector": {
+        "statusCode.$": "$.Payload.statusCode",
+        "chunks.$": "$.Payload.body.chunks",
+        "entities.$": "$.Payload.body.entities",
+        "sources.$": "$.Payload.body.sources"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "IngestionFailed",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "GenerateBrief"
+    },
+    "GenerateBrief": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${GenerateBriefFunctionArn}",
+        "Payload.$": "$"
+      },
+      "ResultPath": "$.generationResult",
+      "ResultSelector": {
+        "statusCode.$": "$.Payload.statusCode",
+        "briefS3Key.$": "$.Payload.body.briefS3Key",
+        "packetS3Key.$": "$.Payload.body.packetS3Key",
+        "questions.$": "$.Payload.body.questions"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException", "Lambda.TooManyRequestsException"],
+          "IntervalSeconds": 5,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "GenerationFailed",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "QualityCheck"
+    },
+    "QualityCheck": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${QualityCheckFunctionArn}",
+        "Payload.$": "$"
+      },
+      "ResultPath": "$.qualityResult",
+      "ResultSelector": {
+        "statusCode.$": "$.Payload.statusCode",
+        "passed.$": "$.Payload.body.passed",
+        "issues.$": "$.Payload.body.issues",
+        "score.$": "$.Payload.body.score"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["Lambda.ServiceException"],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 2,
+          "BackoffRate": 2
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "QualityCheckFailed",
+          "ResultPath": "$.error"
+        }
+      ],
+      "Next": "EvaluateQuality"
+    },
+    "EvaluateQuality": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.qualityResult.passed",
+          "BooleanEquals": true,
+          "Next": "BriefReady"
+        },
+        {
+          "Variable": "$.qualityResult.passed",
+          "BooleanEquals": false,
+          "Next": "RegenerateBrief"
+        }
+      ],
+      "Default": "BriefReady"
+    },
+    "RegenerateBrief": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${GenerateBriefFunctionArn}",
+        "Payload": {
+          "sessionId.$": "$.sessionId",
+          "companyName.$": "$.companyName",
+          "ingestionResult.$": "$.ingestionResult",
+          "qualityFeedback.$": "$.qualityResult.issues",
+          "isRegeneration": true
+        }
+      },
+      "ResultPath": "$.generationResult",
+      "ResultSelector": {
+        "statusCode.$": "$.Payload.statusCode",
+        "briefS3Key.$": "$.Payload.body.briefS3Key",
+        "packetS3Key.$": "$.Payload.body.packetS3Key",
+        "questions.$": "$.Payload.body.questions"
+      },
+      "Next": "BriefReady"
+    },
+    "BriefReady": {
+      "Type": "Succeed"
+    },
+    "IngestionFailed": {
+      "Type": "Fail",
+      "Error": "IngestionError",
+      "Cause": "Source ingestion failed"
+    },
+    "GenerationFailed": {
+      "Type": "Fail",
+      "Error": "GenerationError",
+      "Cause": "Brief generation failed"
+    },
+    "QualityCheckFailed": {
+      "Type": "Fail",
+      "Error": "QualityCheckError",
+      "Cause": "Quality check failed"
+    }
+  }
+}

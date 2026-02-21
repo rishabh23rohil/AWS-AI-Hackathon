@@ -1,0 +1,14 @@
+{
+  "name": "texas-insights-engine",
+  "version": "1.0.0",
+  "private": true,
+  "description": "AI-Powered Business Intelligence Interview System - Texas A&M Mays Business School",
+  "scripts": {
+    "screenshots": "node scripts/capture_screenshots.js",
+    "readme:update": "node scripts/update_readme.js",
+    "docs:refresh": "node scripts/capture_screenshots.js && node scripts/update_readme.js"
+  },
+  "devDependencies": {
+    "playwright": "^1.49.0"
+  }
+}

@@ -1,0 +1,118 @@
+/**
+ * Data-driven flow definitions for Tech & Architecture page.
+ * Used by FlowStepper; no hardcoded step JSX.
+ */
+
+export const MAIN_FLOW_STEPS = [
+  {
+    id: "interviewer",
+    name: "Interviewer",
+    description: "User enters company name, URLs, optional PDF and clicks Create Session. No AI runs until this explicit trigger.",
+    inputs: "Company name, leader name, interviewee email, URLs, hasPdf flag",
+    outputs: "Session form submitted to API",
+    services: ["React", "Amplify"],
+    failureBehavior: "N/A — client-side validation only.",
+  },
+  {
+    id: "api-gateway",
+    name: "API Gateway + Cognito",
+    description: "Validates Cognito JWT and routes request to Create Session Lambda. Unauthenticated requests are rejected.",
+    inputs: "POST body, Authorization header (Bearer JWT)",
+    outputs: "Invokes Lambda with event (body + requestContext.authorizer.claims)",
+    services: ["API Gateway", "Cognito"],
+    failureBehavior: "401 if token missing/invalid; 403 if not authorized. No retry at gateway.",
+  },
+  {
+    id: "create-session",
+    name: "Create Session",
+    description: "Lambda creates DynamoDB interview record, generates S3 presigned URL if PDF, starts Step Function execution. Updates status to 'generating'.",
+    inputs: "sessionId, companyName, leaderName, urls, userId, hasPdf",
+    outputs: "DynamoDB item; S3 presigned URL (optional); Step Function execution ARN; 201 response",
+    services: ["Lambda", "DynamoDB", "S3", "Step Functions"],
+    failureBehavior: "Lambda retries per AWS config. Step Function start is fire-and-forget; execution history in CloudWatch.",
+  },
+  {
+    id: "step-functions",
+    name: "Step Functions",
+    description: "Orchestrates the brief pipeline. Runs Ingest → Generate → Quality in sequence; supports Regenerate loop and Fail states.",
+    inputs: "sessionId, companyName, urls, userId, hasPdf",
+    outputs: "Passes through ingestionResult, generationResult, qualityResult to next states",
+    services: ["Step Functions"],
+    failureBehavior: "Each Task state has Retry (Lambda.ServiceException, TooManyRequests) and Catch → Fail. Idempotency via sessionId.",
+  },
+  {
+    id: "ingest",
+    name: "Ingest",
+    description: "Lambda fetches URL content (HTML → text), runs Comprehend (entities, key phrases) and Textract (PDF). Chunks text for LLM context.",
+    inputs: "urls, hasPdf, sessionId, userId",
+    outputs: "chunks, entities, sources, keyPhrases; DynamoDB status 'ingested'",
+    services: ["Lambda", "Comprehend", "Textract", "S3", "DynamoDB"],
+    failureBehavior: "Retry 3× (2s, backoff 2). Catch → IngestionFailed. Per-URL failures don't fail whole run if at least one source succeeds.",
+  },
+  {
+    id: "generate-brief",
+    name: "Generate Brief",
+    description: "Lambda calls Bedrock 4×: company profile, questions (8), interviewer brief, interviewee packet. Writes artifacts to S3 and metadata to DynamoDB.",
+    inputs: "ingestionResult (chunks, entities, sources), companyName, urls",
+    outputs: "briefS3Key, packetS3Key, questions; S3 objects; DynamoDB brief record and status 'generated'",
+    services: ["Lambda", "Bedrock", "S3", "DynamoDB"],
+    failureBehavior: "Retry 2× (5s, backoff 2). Catch → GenerationFailed. Bedrock throttling handled by retries.",
+  },
+  {
+    id: "quality-check",
+    name: "Quality Check",
+    description: "Lambda validates questions (no leading patterns, minimum count). If failed, Step Function invokes RegenerateBrief with qualityFeedback; else proceeds to BriefReady.",
+    inputs: "generationResult.questions, full state",
+    outputs: "passed (bool), issues (array), score",
+    services: ["Lambda", "Bedrock", "Step Functions"],
+    failureBehavior: "Retry 2×. Catch → QualityCheckFailed. Choice state routes to RegenerateBrief or BriefReady.",
+  },
+  {
+    id: "brief-ready",
+    name: "Brief Ready",
+    description: "Succeed state. Brief and packet are in S3; interview status is 'generated'. Frontend polls or refreshes to show ready state.",
+    inputs: "Full state from pipeline",
+    outputs: "Terminal success; no further Step Function steps",
+    services: ["S3", "DynamoDB"],
+    failureBehavior: "N/A — terminal state.",
+  },
+];
+
+export const POST_BRIEF_FLOW_STEPS = [
+  {
+    id: "send-packet",
+    name: "Send Packet",
+    description: "Interviewer sends interviewee packet via email (SES) or copy link. Interviewee receives feedback URL with no login required.",
+    inputs: "sessionId, intervieweeEmail, deliveryMethod, feedbackBaseUrl",
+    outputs: "SES email (optional); DynamoDB status 'packet_sent'",
+    services: ["Lambda", "S3", "SES", "DynamoDB"],
+    failureBehavior: "SES rate limits and bounces; Lambda returns 4xx/5xx. No Step Function.",
+  },
+  {
+    id: "interviewee-feedback",
+    name: "Interviewee Feedback",
+    description: "Public endpoint (no auth). Interviewee submits corrections and selected questions; stored in DynamoDB. Status → 'feedback_received'.",
+    inputs: "POST body: corrections[], selectedQuestions[], optOut",
+    outputs: "DynamoDB corrections items; status update",
+    services: ["API Gateway", "Lambda", "DynamoDB"],
+    failureBehavior: "400 if session not in packet_sent/feedback_received. No retry; client can resubmit.",
+  },
+  {
+    id: "update-brief",
+    name: "Update Brief",
+    description: "Lambda loads corrections and profile from S3/DynamoDB, calls Bedrock to regenerate interviewer brief with corrections. New version (v2, v3…) in S3.",
+    inputs: "sessionId (path); corrections from DynamoDB; profile/questions from S3",
+    outputs: "briefs/{sessionId}/v{n}/interviewer_brief.json; DynamoDB save_brief; status 'updated'",
+    services: ["Lambda", "Bedrock", "S3", "DynamoDB"],
+    failureBehavior: "Lambda timeout/errors return 5xx. Idempotent per session; version increment is deterministic.",
+  },
+  {
+    id: "post-call-synthesis",
+    name: "Post-Call Synthesis",
+    description: "Interviewer submits post-interview notes. Lambda saves to S3, calls Bedrock for synthesis; results written to S3 and DynamoDB (insights engine). Status → 'completed'.",
+    inputs: "sessionId; body: corrections, keyInsights, surprises, constraints, followUpActions, etc.",
+    outputs: "synthesis/{sessionId}/v{n}/synthesis.json; DynamoDB insights table; status 'completed'",
+    services: ["Lambda", "Bedrock", "S3", "DynamoDB"],
+    failureBehavior: "Same as Update Brief. Audit log entry on success.",
+  },
+];
